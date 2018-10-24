@@ -135,6 +135,7 @@ matrix load_image_augment_paths(char **paths, int n, int use_flip, int min, int 
     return X;
 }
 
+extern int check_mistakes;
 
 box_label *read_boxes(char *filename, int *n)
 {
@@ -148,6 +149,7 @@ box_label *read_boxes(char *filename, int *n)
         char *new_line = "\n";
         fwrite(new_line, sizeof(char), strlen(new_line), fw);
         fclose(fw);
+        if (check_mistakes) getchar();
 
         *n = 0;
         return boxes;
@@ -320,6 +322,7 @@ void fill_truth_detection(char *path, int num_boxes, float *truth, int classes, 
     if (count > num_boxes) count = num_boxes;
     float x, y, w, h;
     int id;
+    int sub = 0;
 
     for (i = 0; i < count; ++i) {
         x = boxes[i].x;
@@ -333,27 +336,33 @@ void fill_truth_detection(char *path, int num_boxes, float *truth, int classes, 
         // if truth (box for object) is smaller than 1x1 pix
         char buff[256];
         if (id >= classes) {
-            printf("\n Wrong annotation: class_id = %d. But class_id should be [from 0 to %d] \n", id, classes);
-            sprintf(buff, "echo %s \"Wrong annotation: class_id = %d. But class_id should be [from 0 to %d]\" >> bad_label.list", labelpath, id, classes);
+            printf("\n Wrong annotation: class_id = %d. But class_id should be [from 0 to %d] \n", id, (classes-1));
+            sprintf(buff, "echo %s \"Wrong annotation: class_id = %d. But class_id should be [from 0 to %d]\" >> bad_label.list", labelpath, id, (classes-1));
             system(buff);
             getchar();
+            ++sub;
             continue;
         }
         if ((w < lowest_w || h < lowest_h)) {
             //sprintf(buff, "echo %s \"Very small object: w < lowest_w OR h < lowest_h\" >> bad_label.list", labelpath);
             //system(buff);
+            ++sub;
             continue;
         }
         if (x == 999999 || y == 999999) {
             printf("\n Wrong annotation: x = 0, y = 0 \n");
             sprintf(buff, "echo %s \"Wrong annotation: x = 0 or y = 0\" >> bad_label.list", labelpath);
             system(buff);
+            ++sub;
+            if (check_mistakes) getchar();
             continue;
         }
         if (x <= 0 || x > 1 || y <= 0 || y > 1) {
             printf("\n Wrong annotation: x = %f, y = %f \n", x, y);
             sprintf(buff, "echo %s \"Wrong annotation: x = %f, y = %f\" >> bad_label.list", labelpath, x, y);
             system(buff);
+            ++sub;
+            if (check_mistakes) getchar();
             continue;
         }
         if (w > 1) {
@@ -361,21 +370,23 @@ void fill_truth_detection(char *path, int num_boxes, float *truth, int classes, 
             sprintf(buff, "echo %s \"Wrong annotation: w = %f\" >> bad_label.list", labelpath, w);
             system(buff);
             w = 1;
+            if (check_mistakes) getchar();
         }
         if (h > 1) {
             printf("\n Wrong annotation: h = %f \n", h);
             sprintf(buff, "echo %s \"Wrong annotation: h = %f\" >> bad_label.list", labelpath, h);
             system(buff);
             h = 1;
+            if (check_mistakes) getchar();
         }
         if (x == 0) x += lowest_w;
         if (y == 0) y += lowest_h;
 
-        truth[i*5+0] = x;
-        truth[i*5+1] = y;
-        truth[i*5+2] = w;
-        truth[i*5+3] = h;
-        truth[i*5+4] = id;
+        truth[(i-sub)*5+0] = x;
+        truth[(i-sub)*5+1] = y;
+        truth[(i-sub)*5+2] = w;
+        truth[(i-sub)*5+3] = h;
+        truth[(i-sub)*5+4] = id;
     }
     free(boxes);
 }
@@ -752,6 +763,7 @@ data load_data_detection(int n, char **paths, int m, int w, int h, int c, int bo
             char buff[256];
             sprintf(buff, "echo %s >> bad.list", filename);
             system(buff);
+            if (check_mistakes) getchar();
             continue;
             //exit(0);
         }
@@ -784,7 +796,7 @@ data load_data_detection(int n, char **paths, int m, int w, int h, int c, int bo
 
         image ai = image_data_augmentation(src, w, h, pleft, ptop, swidth, sheight, flip, jitter, dhue, dsat, dexp);
         d.X.vals[i] = ai.data;
-        
+
         //show_image(ai, "aug");
         //cvWaitKey(0);
 

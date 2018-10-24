@@ -163,10 +163,12 @@ convolutional_layer parse_convolutional(list *options, size_params params)
     int batch_normalize = option_find_int_quiet(options, "batch_normalize", 0);
     int binary = option_find_int_quiet(options, "binary", 0);
     int xnor = option_find_int_quiet(options, "xnor", 0);
+    int use_bin_output = option_find_int_quiet(options, "bin_output", 0);
 
-    convolutional_layer layer = make_convolutional_layer(batch,h,w,c,n,size,stride,padding,activation, batch_normalize, binary, xnor, params.net.adam);
+    convolutional_layer layer = make_convolutional_layer(batch,h,w,c,n,size,stride,padding,activation, batch_normalize, binary, xnor, params.net.adam, use_bin_output);
     layer.flipped = option_find_int_quiet(options, "flipped", 0);
     layer.dot = option_find_float_quiet(options, "dot", 0);
+
     if(params.net.adam){
         layer.B1 = params.net.B1;
         layer.B2 = params.net.B2;
@@ -231,12 +233,17 @@ connected_layer parse_connected(list *options, size_params params)
 
 softmax_layer parse_softmax(list *options, size_params params)
 {
-    int groups = option_find_int_quiet(options, "groups",1);
-    softmax_layer layer = make_softmax_layer(params.batch, params.inputs, groups);
-    layer.temperature = option_find_float_quiet(options, "temperature", 1);
-    char *tree_file = option_find_str(options, "tree", 0);
-    if (tree_file) layer.softmax_tree = read_tree(tree_file);
-    return layer;
+	int groups = option_find_int_quiet(options, "groups", 1);
+	softmax_layer layer = make_softmax_layer(params.batch, params.inputs, groups);
+	layer.temperature = option_find_float_quiet(options, "temperature", 1);
+	char *tree_file = option_find_str(options, "tree", 0);
+	if (tree_file) layer.softmax_tree = read_tree(tree_file);
+	layer.w = params.w;
+	layer.h = params.h;
+	layer.c = params.c;
+	layer.spatial = option_find_float_quiet(options, "spatial", 0);
+	layer.noloss = option_find_int_quiet(options, "noloss", 0);
+	return layer;
 }
 
 int *parse_yolo_mask(char *a, int *num)
@@ -818,6 +825,8 @@ network parse_network_cfg_custom(char *filename, int batch)
 #ifdef GPU
         if(gpu_index >= 0){
             net.workspace = cuda_make_array(0, workspace_size/sizeof(float) + 1);
+            int size = get_network_input_size(net) * net.batch;
+            net.input_state_gpu = cuda_make_array(0, size);
         }else {
             net.workspace = calloc(1, workspace_size);
         }
@@ -967,12 +976,12 @@ void save_weights_upto(network net, char *filename, int cutoff)
     if(!fp) file_error(filename);
 
     int major = 0;
-    int minor = 1;
-    int revision = 0;
+    int minor = 2;
+    int revision = 5;
     fwrite(&major, sizeof(int), 1, fp);
     fwrite(&minor, sizeof(int), 1, fp);
     fwrite(&revision, sizeof(int), 1, fp);
-    fwrite(net.seen, sizeof(int), 1, fp);
+    fwrite(net.seen, sizeof(uint64_t), 1, fp);
 
     int i;
     for(i = 0; i < net.n && i < cutoff; ++i){

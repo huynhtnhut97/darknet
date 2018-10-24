@@ -27,7 +27,13 @@
 
 IplImage* draw_train_chart(float max_img_loss, int max_batches, int number_of_lines, int img_size);
 void draw_train_loss(IplImage* img, int img_size, float avg_loss, float max_img_loss, int current_batch, int max_batches);
+
+#define CV_RGB(r, g, b) cvScalar( (b), (g), (r), 0 )
 #endif    // OPENCV
+
+#include "http_stream.h"
+
+int check_mistakes;
 
 static int coco_ids[] = {1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,31,32,33,34,35,36,37,38,39,40,41,42,43,44,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,67,70,72,73,74,75,76,77,78,79,80,81,82,84,85,86,87,88,89,90};
 
@@ -102,7 +108,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     args.small_object = net.small_object;
     args.d = &buffer;
     args.type = DETECTION_DATA;
-    args.threads = 16;    // 64
+    args.threads = 64;    // 16 or 64
 
     args.angle = net.angle;
     args.exposure = net.exposure;
@@ -110,7 +116,8 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     args.hue = net.hue;
 
 #ifdef OPENCV
-    args.threads = 3 * ngpus;
+    args.threads = 3 * ngpus;   // Amazon EC2 Tesla V100: p3.2xlarge (8 logical cores) - p3.16xlarge
+    //args.threads = 12 * ngpus;    // Ryzen 7 2700X (16 logical cores)
     IplImage* img = NULL;
     float max_img_loss = 5;
     int number_of_lines = 100;
@@ -645,9 +652,16 @@ void validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, float
             network_predict(net, X);
 
             int nboxes = 0;
-            int letterbox = (args.type == LETTERBOX_DATA);
             float hier_thresh = 0;
-            detection *dets = get_network_boxes(&net, 1, 1, thresh, hier_thresh, 0, 0, &nboxes, letterbox);
+            detection *dets;
+            if (args.type == LETTERBOX_DATA) {
+                int letterbox = 1;
+                dets = get_network_boxes(&net, val[t].w, val[t].h, thresh, hier_thresh, 0, 1, &nboxes, letterbox);
+            }
+            else {
+                int letterbox = 0;
+                dets = get_network_boxes(&net, 1, 1, thresh, hier_thresh, 0, 0, &nboxes, letterbox);
+            }
             //detection *dets = get_network_boxes(&net, val[t].w, val[t].h, thresh, hier_thresh, 0, 1, &nboxes, letterbox); // for letterbox=1
             if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
 
@@ -932,6 +946,7 @@ void calc_anchors(char *datacfg, int num_of_clusters, int width, int height, int
                 sprintf(buff, "echo \"Wrong label: %s - j = %d, x = %f, y = %f, width = %f, height = %f\" >> bad_label.list",
                     labelpath, j, truth[j].x, truth[j].y, truth[j].w, truth[j].h);
                 system(buff);
+                if (check_mistakes) getchar();
             }
             number_of_boxes++;
             rel_width_height_array = realloc(rel_width_height_array, 2 * number_of_boxes * sizeof(float));
@@ -1026,19 +1041,24 @@ void calc_anchors(char *datacfg, int num_of_clusters, int width, int height, int
 
     char buff[1024];
     FILE* fw = fopen("anchors.txt", "wb");
-    printf("\nSaving anchors to the file: anchors.txt \n");
-    printf("anchors = ");
-    for (i = 0; i < num_of_clusters; ++i) {
-        sprintf(buff, "%2.4f,%2.4f", centers->data.fl[i * 2], centers->data.fl[i * 2 + 1]);
-        printf("%s", buff);
-        fwrite(buff, sizeof(char), strlen(buff), fw);
-        if (i + 1 < num_of_clusters) {
-            fwrite(", ", sizeof(char), 2, fw);
-            printf(", ");
+    if (fw) {
+        printf("\nSaving anchors to the file: anchors.txt \n");
+        printf("anchors = ");
+        for (i = 0; i < num_of_clusters; ++i) {
+            sprintf(buff, "%2.4f,%2.4f", centers->data.fl[i * 2], centers->data.fl[i * 2 + 1]);
+            printf("%s", buff);
+            fwrite(buff, sizeof(char), strlen(buff), fw);
+            if (i + 1 < num_of_clusters) {
+                fwrite(", ", sizeof(char), 2, fw);
+                printf(", ");
+            }
         }
+        printf("\n");
+        fclose(fw);
     }
-    printf("\n");
-    fclose(fw);
+    else {
+        printf(" Error: file anchors.txt can't be open \n");
+    }
 
     if (show) {
         size_t img_size = 700;
@@ -1130,13 +1150,14 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
         //for(j = 0; j < l.w*l.h*l.n; ++j) probs[j] = calloc(l.classes, sizeof(float *));
 
         float *X = sized.data;
-        time= what_time_is_it_now();
+
+        //time= what_time_is_it_now();
+        double time = get_time_point();
         network_predict(net, X);
         //network_predict_image(&net, im); letterbox = 1;
-        printf("%s: Predicted in %f seconds.\n", input, (what_time_is_it_now()-time));
-        //get_region_boxes(l, 1, 1, thresh, probs, boxes, 0, 0);
-        // if (nms) do_nms_sort_v2(boxes, probs, l.w*l.h*l.n, l.classes, nms);
-        //draw_detections(im, l.w*l.h*l.n, thresh, boxes, probs, names, alphabet, l.classes);
+        printf("%s: Predicted in %lf milli-seconds.\n", input, ((double)get_time_point() - time) / 1000);
+        //printf("%s: Predicted in %f seconds.\n", input, (what_time_is_it_now()-time));
+
         int nboxes = 0;
         detection *dets = get_network_boxes(&net, im.w, im.h, thresh, hier_thresh, 0, 1, &nboxes, letterbox);
         if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
@@ -1208,6 +1229,7 @@ void run_detector(int argc, char **argv)
 {
     int dont_show = find_arg(argc, argv, "-dont_show");
     int show = find_arg(argc, argv, "-show");
+    check_mistakes = find_arg(argc, argv, "-check_mistakes");
     int http_stream_port = find_int_arg(argc, argv, "-http_port", -1);
     char *out_filename = find_char_arg(argc, argv, "-out_filename", 0);
     char *outfile = find_char_arg(argc, argv, "-out", 0);
@@ -1224,7 +1246,7 @@ void run_detector(int argc, char **argv)
     int ext_output = find_arg(argc, argv, "-ext_output");
     int save_labels = find_arg(argc, argv, "-save_labels");
     if(argc < 4){
-        fprintf(stderr, "usage: %s %s [train/test/valid] [cfg] [weights (optional)]\n", argv[0], argv[1]);
+        fprintf(stderr, "usage: %s %s [train/test/valid/demo/map] [data] [cfg] [weights (optional)]\n", argv[0], argv[1]);
         return;
     }
     char *gpu_list = find_char_arg(argc, argv, "-gpus", 0);

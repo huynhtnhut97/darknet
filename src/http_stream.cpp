@@ -1,3 +1,5 @@
+#include "http_stream.h"
+
 #ifdef OPENCV
 //
 // a single-threaded, multi client(using select), debug webserver - streaming out mjpg.
@@ -40,6 +42,7 @@ struct _INIT_W32DATA
 #include <cstdio>
 #include <vector>
 #include <iostream>
+#include <algorithm>
 using std::cerr;
 using std::endl;
 
@@ -52,7 +55,6 @@ using std::endl;
 #endif
 using namespace cv;
 
-#include "http_stream.h"
 #include "image.h"
 
 
@@ -280,7 +282,7 @@ image image_data_augmentation(IplImage* ipl, int w, int h,
     cv::Rect img_rect(cv::Point2i(0, 0), img.size());
     cv::Rect new_src_rect = src_rect & img_rect;
 
-    cv::Rect dst_rect(cv::Point2i(std::max(0, -pleft), std::max(0, -ptop)), new_src_rect.size());
+    cv::Rect dst_rect(cv::Point2i(std::max<int>(0, -pleft), std::max<int>(0, -ptop)), new_src_rect.size());
 
     cv::Mat cropped(cv::Size(src_rect.width, src_rect.height), img.type());
     cropped.setTo(cv::Scalar::all(0));
@@ -320,6 +322,11 @@ image image_data_augmentation(IplImage* ipl, int w, int h,
         sized *= dexp;
     }
 
+    //std::stringstream window_name;
+    //window_name << "augmentation - " << ipl;
+    //cv::imshow(window_name.str(), sized);
+    //cv::waitKey(0);
+
     // Mat -> IplImage -> image
     IplImage src = sized;
     image out = ipl_to_image(&src);
@@ -329,3 +336,61 @@ image image_data_augmentation(IplImage* ipl, int w, int h,
 
 
 #endif    // OPENCV
+
+// -----------------------------------------------------
+
+#if __cplusplus >= 201103L || _MSC_VER >= 1900  // C++11
+
+#include <chrono>
+#include <iostream>
+
+static std::chrono::steady_clock::time_point steady_start, steady_end;
+static double total_time;
+
+double get_time_point() {
+    std::chrono::steady_clock::time_point current_time = std::chrono::steady_clock::now();
+    //uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(current_time.time_since_epoch()).count();
+    return std::chrono::duration_cast<std::chrono::microseconds>(current_time.time_since_epoch()).count();
+}
+
+void start_timer() {
+    steady_start = std::chrono::steady_clock::now();
+}
+
+void stop_timer() {
+    steady_end = std::chrono::steady_clock::now();
+}
+
+double get_time() {
+    double took_time = std::chrono::duration<double>(steady_end - steady_start).count();
+    total_time += took_time;
+    return took_time;
+}
+
+void stop_timer_and_show() {
+    stop_timer();
+    std::cout << " " << get_time()*1000 << " msec" << std::endl;
+}
+
+void stop_timer_and_show_name(char *name) {
+    std::cout << " " << name;
+    stop_timer_and_show();
+}
+
+void show_total_time() {
+    std::cout << " Total: " << total_time * 1000 << " msec" << std::endl;
+}
+
+#else // C++11
+#include <iostream>
+
+double get_time_point() { return 0; }
+void start_timer() {}
+void stop_timer() {}
+double get_time() { return 0; }
+void stop_timer_and_show() {
+    std::cout << " stop_timer_and_show() isn't implemented " << std::endl;
+}
+void stop_timer_and_show_name(char *name) { stop_timer_and_show(); }
+void total_time() {}
+#endif // C++11
