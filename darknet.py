@@ -31,6 +31,10 @@ from ctypes import *
 import math
 import random
 import os
+import utils
+from operator import itemgetter
+import numpy as np
+import cv2
 
 def sample(probs):
     s = sum(probs)
@@ -237,6 +241,7 @@ def detect(net, meta, image, thresh=.5, hier_thresh=.5, nms=.45, debug= False):
     #pylint: disable= C0321
     im = load_image(image, 0, 0)
     if debug: print("Loaded image")
+    #print("Entered here")
     ret = detect_image(net, meta, im, thresh, hier_thresh, nms, debug)
     free_image(im)
     if debug: print("freed image")
@@ -249,7 +254,7 @@ def detect_image(net, meta, im, thresh=.5, hier_thresh=.5, nms=.45, debug= False
     #custom_image = cv2.resize(custom_image,(lib.network_width(net), lib.network_height(net)), interpolation = cv2.INTER_LINEAR)
     #import scipy.misc
     #custom_image = scipy.misc.imread(image)
-    #im, arr = array_to_image(custom_image)		# you should comment line below: free_image(im)
+    #im, arr = array_to_image(custom_image)     # you should comment line below: free_image(im)
     num = c_int(0)
     if debug: print("Assigned num")
     pnum = pointer(num)
@@ -298,7 +303,7 @@ netMain = None
 metaMain = None
 altNames = None
 
-def performDetect(imagePath="data/dog.jpg", thresh= 0.25, configPath = "./cfg/yolov3.cfg", weightPath = "yolov3.weights", metaPath= "./cfg/coco.data", showImage= True, makeImageOnly = False, initOnly= False):
+def performDetect(imagePath="data/dog.jpg",output="./", thresh= 0.5, configPath = "./cfg/yolov3.cfg", weightPath = "yolov3.weights", metaPath= "./cfg/coco.data", showImage= True, makeImageOnly = False, initOnly= False):
     """
     Convenience function to handle the detection and returns of objects.
 
@@ -385,10 +390,11 @@ def performDetect(imagePath="data/dog.jpg", thresh= 0.25, configPath = "./cfg/yo
     if not os.path.exists(imagePath):
         raise ValueError("Invalid image path `"+os.path.abspath(imagePath)+"`")
     # Do the detection
-    #detections = detect(netMain, metaMain, imagePath, thresh)	# if is used cv2.imread(image)
+    #detections = detect(netMain, metaMain, imagePath, thresh)  # if is used cv2.imread(image)
     detections = detect(netMain, metaMain, imagePath.encode("ascii"), thresh)
     if showImage:
         try:
+            print("enter here")
             from skimage import io, draw
             import numpy as np
             image = io.imread(imagePath)
@@ -429,9 +435,11 @@ def performDetect(imagePath="data/dog.jpg", thresh= 0.25, configPath = "./cfg/yo
                 draw.set_color(image, (rr3, cc3), boxColor, alpha= 0.8)
                 draw.set_color(image, (rr4, cc4), boxColor, alpha= 0.8)
                 draw.set_color(image, (rr5, cc5), boxColor, alpha= 0.8)
-            if not makeImageOnly:
-                io.imshow(image)
-                io.show()
+                output_img = os.path.join(output,"image.jpg") 
+                cv2.imwrite(output_img,cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+            # if not makeImageOnly:
+            #     io.imshow(image)
+            #     io.show()
             detections = {
                 "detections": detections,
                 "image": image,
@@ -442,4 +450,88 @@ def performDetect(imagePath="data/dog.jpg", thresh= 0.25, configPath = "./cfg/yo
     return detections
 
 if __name__ == "__main__":
-    print(performDetect())
+    CLASSES = ["ignored regions","pedestrian","people","bicycle","car","van","truck","tricycle","awning-tricycle","bus","motor"]
+    performDetect(imagePath="/home/nhuthuynh/socket/data/image.jpg",output="/home/nhuthuynh/socket/results/",showImage=True,configPath="/home/nhuthuynh/darknet_alexeyAB/darknet/cfg/visdrone-obj-all-classes.cfg",weightPath="/home/nhuthuynh/darknet_alexeyAB/darknet/backup/visdrone-obj-all-classes_2000.weights",metaPath="/home/nhuthuynh/darknet_alexeyAB/darknet/data/visdrone.data")
+    # listvideo = utils.get_video_from_visdrone("/mnt/data/visdrone2018/gdown.pl/VisDrone2019-VID-test-challenge/")
+    # for video in listvideo:
+    #     video_path = video[0]
+    #     print("Detecting video {}".format(os.path.basename(video_path)))
+    #     with open('data/YOLOv3_results-test-challenge-VID/{}.txt'.format(os.path.basename(video_path)),'w') as file:
+    #         video_detection = []
+    #         for frame in video[1]:
+    #             detections = performDetect(imagePath=os.path.join(video_path,frame),showImage=False,configPath="./cfg/visdrone-obj-all-classes.cfg",weightPath="./backup/visdrone-obj-all-classes_2000.weights",metaPath="./data/visdrone.data")
+    #             frame_detection = []
+    #             frame_detection.append(int(os.path.splitext(frame)[0]))
+    #             for detection in detections:
+    #                 cls_id = CLASSES.index(detection[0])
+    #                 score = detection[1]
+    #                 bbox = detection[2]
+    #                 x = bbox[0]
+    #                 y = bbox[1]
+    #                 w = bbox[2]
+    #                 h = bbox[3]
+    #                 instance = []              
+    #                 instance.append(int(cls_id))
+    #                 instance.append(score)
+    #                 instance.append(x)
+    #                 instance.append(y)
+    #                 instance.append(w)
+    #                 instance.append(h)
+    #                 frame_detection.append(instance)
+    #         # for item in frame_detection:
+    #         #     print("########")
+    #         #     print(item)      
+    #             video_detection.append(frame_detection)
+    #         sortedList = sorted(video_detection,key=itemgetter(0))
+    #         print(np.shape(sortedList))
+    #         for frame in sortedList:
+    #             frame_id = frame[0]
+    #             #print(frame_id)
+    #             for item in frame[1:]:
+    #                 cls_id = item[0]
+    #                 score = item[1]
+    #                 x = int(item[2])
+    #                 y = int(item[3])
+    #                 w = int(item[4])
+    #                 h = int(item[5])
+    #                 file.write(str(frame_id)+','+'-1'+','+str(x)+','+str(y)+','+str(w)+','+str(h)+','+'{0:.4f}'.format(float(score))+','+str(cls_id)+','+'-1'+','+'-1')
+    #                 file.write('\n')
+    # images_path = "/mnt/data/nhuthuynh/sequences/"
+    # results_path = "./results"
+    # for folder in os.listdir(images_path):
+    #     folder_path = os.path.join(images_path,folder)
+    #     for image in os.listdir(folder_path):
+    #         image_path = os.path.join(folder_path,image)
+    #         print(image_path)
+    #         detections = performDetect(thresh=0.5,imagePath=image_path ,showImage=False,configPath="./cfg/visdrone-obj-all-classes.cfg",weightPath="./backup/visdrone-obj-all-classes_2000.weights",metaPath="./data/visdrone.data")
+    #         file_name = folder+'_'+os.path.splitext(image)[0]+'.txt' #detected result file
+    #         file_path = os.path.join(results_path,file_name) # full file path of detected result file
+    #         with open(file_path,'w') as file:
+    #             for detection in detections:
+    #                 cls_id = CLASSES.index(detection[0])
+    #                 score = detection[1]
+    #                 bbox = detection[2]
+    #                 x_cent = bbox[0]
+    #                 y_cent = bbox[1]
+    #                 w = bbox[2]
+    #                 h = bbox[3]
+    #                 x = x_cent - w/2
+    #                 y = y_cent - h/2
+    #                 file.write(str(detection[0])+','+str(int(x))+','+str(int(y))+','+str(int(w))+','+str(int(h)))
+    #                 file.write('\n')
+
+    # detections = performDetect(imagePath="/home/nhuthuynh/socket/data/image.jpg" ,showImage=False,configPath="./cfg/visdrone-obj-all-classes.cfg",weightPath="./backup/visdrone-obj-all-classes_2000.weights",metaPath="./data/visdrone.data")
+    # with open('./result.txt','w') as file:
+    #     for detection in detections:
+    #         print(detection[0])
+    #         cls_id = CLASSES.index(detection[0])
+    #         score = detection[1]
+    #         bbox = detection[2]
+    #         x_cent = bbox[0]
+    #         y_cent = bbox[1]
+    #         w = bbox[2]
+    #         h = bbox[3]
+    #         x = x_cent - w/2
+    #         y = y_cent - h/2
+    #         file.write(str(detection[0])+','+str(int(x))+','+str(int(y))+','+str(int(w))+','+str(int(h)))
+    #         file.write('\n')
