@@ -38,6 +38,7 @@
 #include "upsample_layer.h"
 #include "version.h"
 #include "yolo_layer.h"
+#include "gaussian_yolo_layer.h"
 
 typedef struct{
     char *type;
@@ -57,6 +58,7 @@ LAYER_TYPE string_to_layer_type(char * type)
     if (strcmp(type, "[detection]")==0) return DETECTION;
     if (strcmp(type, "[region]")==0) return REGION;
     if (strcmp(type, "[yolo]") == 0) return YOLO;
+    if (strcmp(type, "[Gaussian_yolo]") == 0) return GAUSSIAN_YOLO;
     if (strcmp(type, "[local]")==0) return LOCAL;
     if (strcmp(type, "[conv]")==0
             || strcmp(type, "[convolutional]")==0) return CONVOLUTIONAL;
@@ -128,6 +130,7 @@ typedef struct size_params{
     int c;
     int index;
     int time_steps;
+    int train;
     network net;
 } size_params;
 
@@ -152,14 +155,23 @@ local_layer parse_local(list *options, size_params params)
     return layer;
 }
 
-convolutional_layer parse_convolutional(list *options, size_params params, network net)
+convolutional_layer parse_convolutional(list *options, size_params params)
 {
     int n = option_find_int(options, "filters",1);
     int groups = option_find_int_quiet(options, "groups", 1);
     int size = option_find_int(options, "size",1);
-    int stride = option_find_int(options, "stride",1);
-    int stride_x = option_find_int_quiet(options, "stride_x", stride);
-    int stride_y = option_find_int_quiet(options, "stride_y", stride);
+    int stride = -1;
+    //int stride = option_find_int(options, "stride",1);
+    int stride_x = option_find_int_quiet(options, "stride_x", -1);
+    int stride_y = option_find_int_quiet(options, "stride_y", -1);
+    if (stride_x < 1 || stride_y < 1) {
+        stride = option_find_int(options, "stride", 1);
+        if (stride_x < 1) stride_x = stride;
+        if (stride_y < 1) stride_y = stride;
+    }
+    else {
+        stride = option_find_int_quiet(options, "stride", 1);
+    }
     int dilation = option_find_int_quiet(options, "dilation", 1);
     int antialiasing = option_find_int_quiet(options, "antialiasing", 0);
     if (size == 1) dilation = 1;
@@ -174,8 +186,8 @@ convolutional_layer parse_convolutional(list *options, size_params params, netwo
 
     int share_index = option_find_int_quiet(options, "share_index", -1000000000);
     convolutional_layer *share_layer = NULL;
-    if(share_index >= 0) share_layer = &net.layers[share_index];
-    else if(share_index != -1000000000) share_layer = &net.layers[params.index + share_index];
+    if(share_index >= 0) share_layer = &params.net.layers[share_index];
+    else if(share_index != -1000000000) share_layer = &params.net.layers[params.index + share_index];
 
     int batch,h,w,c;
     h = params.h;
@@ -188,7 +200,7 @@ convolutional_layer parse_convolutional(list *options, size_params params, netwo
     int xnor = option_find_int_quiet(options, "xnor", 0);
     int use_bin_output = option_find_int_quiet(options, "bin_output", 0);
 
-    convolutional_layer layer = make_convolutional_layer(batch,1,h,w,c,n,groups,size,stride_x,stride_y,dilation,padding,activation, batch_normalize, binary, xnor, params.net.adam, use_bin_output, params.index, antialiasing, share_layer, assisted_excitation);
+    convolutional_layer layer = make_convolutional_layer(batch,1,h,w,c,n,groups,size,stride_x,stride_y,dilation,padding,activation, batch_normalize, binary, xnor, params.net.adam, use_bin_output, params.index, antialiasing, share_layer, assisted_excitation, params.train);
     layer.flipped = option_find_int_quiet(options, "flipped", 0);
     layer.dot = option_find_float_quiet(options, "dot", 0);
 
@@ -219,7 +231,7 @@ layer parse_crnn(list *options, size_params params)
     int batch_normalize = option_find_int_quiet(options, "batch_normalize", 0);
     int xnor = option_find_int_quiet(options, "xnor", 0);
 
-    layer l = make_crnn_layer(params.batch, params.h, params.w, params.c, hidden_filters, output_filters, groups, params.time_steps, size, stride, dilation, padding, activation, batch_normalize, xnor);
+    layer l = make_crnn_layer(params.batch, params.h, params.w, params.c, hidden_filters, output_filters, groups, params.time_steps, size, stride, dilation, padding, activation, batch_normalize, xnor, params.train);
 
     l.shortcut = option_find_int_quiet(options, "shortcut", 0);
 
@@ -280,7 +292,7 @@ layer parse_conv_lstm(list *options, size_params params)
     int xnor = option_find_int_quiet(options, "xnor", 0);
     int peephole = option_find_int_quiet(options, "peephole", 0);
 
-    layer l = make_conv_lstm_layer(params.batch, params.h, params.w, params.c, output_filters, groups, params.time_steps, size, stride, dilation, padding, activation, batch_normalize, peephole, xnor);
+    layer l = make_conv_lstm_layer(params.batch, params.h, params.w, params.c, output_filters, groups, params.time_steps, size, stride, dilation, padding, activation, batch_normalize, peephole, xnor, params.train);
 
     l.state_constrain = option_find_int_quiet(options, "state_constrain", params.time_steps * 32);
     l.shortcut = option_find_int_quiet(options, "shortcut", 0);
@@ -382,6 +394,69 @@ layer parse_yolo(list *options, size_params params)
             if (a[i] == ',') ++n;
         }
         for (i = 0; i < n && i < total*2; ++i) {
+            float bias = atof(a);
+            l.biases[i] = bias;
+            a = strchr(a, ',') + 1;
+        }
+    }
+    return l;
+}
+
+
+int *parse_gaussian_yolo_mask(char *a, int *num) // Gaussian_YOLOv3
+{
+    int *mask = 0;
+    if (a) {
+        int len = strlen(a);
+        int n = 1;
+        int i;
+        for (i = 0; i < len; ++i) {
+            if (a[i] == ',') ++n;
+        }
+        mask = (int *)calloc(n, sizeof(int));
+        for (i = 0; i < n; ++i) {
+            int val = atoi(a);
+            mask[i] = val;
+            a = strchr(a, ',') + 1;
+        }
+        *num = n;
+    }
+    return mask;
+}
+
+
+layer parse_gaussian_yolo(list *options, size_params params) // Gaussian_YOLOv3
+{
+    int classes = option_find_int(options, "classes", 20);
+    int max_boxes = option_find_int_quiet(options, "max", 90);
+    int total = option_find_int(options, "num", 1);
+    int num = total;
+
+    char *a = option_find_str(options, "mask", 0);
+    int *mask = parse_gaussian_yolo_mask(a, &num);
+    layer l = make_gaussian_yolo_layer(params.batch, params.w, params.h, num, total, mask, classes, max_boxes);
+    assert(l.outputs == params.inputs);
+
+    l.scale_x_y = option_find_float_quiet(options, "scale_x_y", 1);
+    l.max_boxes = option_find_int_quiet(options, "max", 90);
+    l.jitter = option_find_float(options, "jitter", .2);
+
+    l.ignore_thresh = option_find_float(options, "ignore_thresh", .5);
+    l.truth_thresh = option_find_float(options, "truth_thresh", 1);
+    l.random = option_find_int_quiet(options, "random", 0);
+
+    char *map_file = option_find_str(options, "map", 0);
+    if (map_file) l.map = read_map(map_file);
+
+    a = option_find_str(options, "anchors", 0);
+    if (a) {
+        int len = strlen(a);
+        int n = 1;
+        int i;
+        for (i = 0; i < len; ++i) {
+            if (a[i] == ',') ++n;
+        }
+        for (i = 0; i < n; ++i) {
             float bias = atof(a);
             l.biases[i] = bias;
             a = strchr(a, ',') + 1;
@@ -556,7 +631,7 @@ maxpool_layer parse_maxpool(list *options, size_params params)
     batch=params.batch;
     if(!(h && w && c)) error("Layer before maxpool layer must output image.");
 
-    maxpool_layer layer = make_maxpool_layer(batch, h, w, c, size, stride_x, stride_y, padding, maxpool_depth, out_channels, antialiasing);
+    maxpool_layer layer = make_maxpool_layer(batch, h, w, c, size, stride_x, stride_y, padding, maxpool_depth, out_channels, antialiasing, params.train);
     return layer;
 }
 
@@ -610,7 +685,7 @@ layer parse_shortcut(list *options, size_params params, network net)
     layer from = net.layers[index];
     if (from.antialiasing) from = *from.input_layer;
 
-    layer s = make_shortcut_layer(batch, index, params.w, params.h, params.c, from.out_w, from.out_h, from.out_c, assisted_excitation);
+    layer s = make_shortcut_layer(batch, index, params.w, params.h, params.c, from.out_w, from.out_h, from.out_c, assisted_excitation, params.train);
 
     char *activation_s = option_find_str(options, "activation", "linear");
     ACTIVATION activation = get_activation(activation_s);
@@ -680,7 +755,7 @@ layer parse_upsample(list *options, size_params params, network net)
     return l;
 }
 
-route_layer parse_route(list *options, size_params params, network net)
+route_layer parse_route(list *options, size_params params)
 {
     char *l = option_find(options, "layers");
     int len = strlen(l);
@@ -698,25 +773,29 @@ route_layer parse_route(list *options, size_params params, network net)
         l = strchr(l, ',')+1;
         if(index < 0) index = params.index + index;
         layers[i] = index;
-        sizes[i] = net.layers[index].outputs;
+        sizes[i] = params.net.layers[index].outputs;
     }
     int batch = params.batch;
 
-    route_layer layer = make_route_layer(batch, n, layers, sizes);
+    int groups = option_find_int_quiet(options, "groups", 1);
+    int group_id = option_find_int_quiet(options, "group_id", 0);
 
-    convolutional_layer first = net.layers[layers[0]];
+    route_layer layer = make_route_layer(batch, n, layers, sizes, groups, group_id);
+
+    convolutional_layer first = params.net.layers[layers[0]];
     layer.out_w = first.out_w;
     layer.out_h = first.out_h;
     layer.out_c = first.out_c;
     for(i = 1; i < n; ++i){
         int index = layers[i];
-        convolutional_layer next = net.layers[index];
+        convolutional_layer next = params.net.layers[index];
         if(next.out_w == first.out_w && next.out_h == first.out_h){
             layer.out_c += next.out_c;
         }else{
             layer.out_h = layer.out_w = layer.out_c = 0;
         }
     }
+    layer.out_c = layer.out_c / layer.groups;
 
     return layer;
 }
@@ -866,6 +945,9 @@ network parse_network_cfg_custom(char *filename, int batch, int time_steps)
     net.gpu_index = gpu_index;
     size_params params;
 
+    if (batch > 0) params.train = 0;    // allocates memory for Detection only
+    else params.train = 1;              // allocates memory for Detection & Training
+
     section *s = (section *)n->val;
     list *options = s->options;
     if(!is_network(s)) error("First section must be [net] or [network]");
@@ -877,6 +959,8 @@ network parse_network_cfg_custom(char *filename, int batch, int time_steps)
     params.inputs = net.inputs;
     if (batch > 0) net.batch = batch;
     if (time_steps > 0) net.time_steps = time_steps;
+    if (net.batch < 1) net.batch = 1;
+    if (net.time_steps < 1) net.time_steps = 1;
     if (net.batch < net.time_steps) net.batch = net.time_steps;
     params.batch = net.batch;
     params.time_steps = net.time_steps;
@@ -898,7 +982,7 @@ network parse_network_cfg_custom(char *filename, int batch, int time_steps)
         layer l = { (LAYER_TYPE)0 };
         LAYER_TYPE lt = string_to_layer_type(s->type);
         if(lt == CONVOLUTIONAL){
-            l = parse_convolutional(options, params, net);
+            l = parse_convolutional(options, params);
         }else if(lt == LOCAL){
             l = parse_local(options, params);
         }else if(lt == ACTIVE){
@@ -923,6 +1007,8 @@ network parse_network_cfg_custom(char *filename, int batch, int time_steps)
             l = parse_region(options, params);
         }else if (lt == YOLO) {
             l = parse_yolo(options, params);
+        }else if (lt == GAUSSIAN_YOLO) {
+            l = parse_gaussian_yolo(options, params);
         }else if(lt == DETECTION){
             l = parse_detection(options, params);
         }else if(lt == SOFTMAX){
@@ -941,7 +1027,7 @@ network parse_network_cfg_custom(char *filename, int batch, int time_steps)
         }else if(lt == AVGPOOL){
             l = parse_avgpool(options, params);
         }else if(lt == ROUTE){
-            l = parse_route(options, params, net);
+            l = parse_route(options, params);
             int k;
             for (k = 0; k < l.n; ++k) net.layers[l.input_layers[k]].use_bin_output = 0;
         }else if (lt == UPSAMPLE) {

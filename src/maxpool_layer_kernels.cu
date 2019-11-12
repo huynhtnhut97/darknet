@@ -36,7 +36,7 @@ __global__ void forward_maxpool_depth_layer_kernel(int n, int w, int h, int c, i
             max = (val > max) ? val : max;
         }
         output[out_index] = max;
-        indexes[out_index] = max_i;
+        if (indexes) indexes[out_index] = max_i;
     }
 }
 
@@ -88,7 +88,7 @@ __global__ void forward_maxpool_layer_kernel(int n, int in_h, int in_w, int in_c
         }
     }
     output[out_index] = max;
-    indexes[out_index] = max_i;
+    if (indexes) indexes[out_index] = max_i;
 }
 
 __global__ void backward_maxpool_layer_kernel(int n, int in_h, int in_w, int in_c, int stride_x, int stride_y, int size, int pad, float *delta, float *prev_delta, int *indexes)
@@ -199,11 +199,13 @@ extern "C" void backward_maxpool_layer_gpu(maxpool_layer layer, network_state st
         s.train = state.train;
         s.workspace = state.workspace;
         s.net = state.net;
-        s.delta = layer.delta_gpu;
+        s.delta = layer.delta_gpu;  // s.delta will be returned to l.delta_gpu
         s.input = layer.input_antialiasing_gpu;
         //if (!state.train) s.index = state.index;  // don't use TC for training (especially without cuda_convert_f32_to_f16() )
         simple_copy_ongpu(layer.input_layer->outputs*layer.input_layer->batch, layer.delta_gpu, layer.input_layer->delta_gpu);
         backward_convolutional_layer_gpu(*(layer.input_layer), s);
+
+        //simple_copy_ongpu(layer.outputs*layer.batch, layer.input_antialiasing_gpu, layer.output_gpu);
     }
 
     if (layer.maxpool_depth) {
