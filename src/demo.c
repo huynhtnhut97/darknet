@@ -7,6 +7,7 @@
 #include "box.h"
 #include "image.h"
 #include "demo.h"
+#include "darknet.h"
 #ifdef WIN32
 #include <time.h>
 #include "gettimeofday.h"
@@ -41,7 +42,6 @@ static int demo_json_port = -1;
 
 static float* predictions[NFRAMES];
 static int demo_index = 0;
-static image images[NFRAMES];
 static mat_cv* cv_images[NFRAMES];
 static float *avg;
 
@@ -104,7 +104,7 @@ double get_wall_time()
 }
 
 void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int cam_index, const char *filename, char **names, int classes,
-    int frame_skip, char *prefix, char *out_filename, int mjpeg_port, int json_port, int dont_show, int ext_output, int letter_box_in)
+    int frame_skip, char *prefix, char *out_filename, int mjpeg_port, int json_port, int dont_show, int ext_output, int letter_box_in, int time_limit_sec, char *http_post_host)
 {
     letter_box = letter_box_in;
     in_img = det_img = show_img = NULL;
@@ -146,7 +146,6 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
 
     avg = (float *) calloc(l.outputs, sizeof(float));
     for(j = 0; j < NFRAMES; ++j) predictions[j] = (float *) calloc(l.outputs, sizeof(float));
-    for(j = 0; j < NFRAMES; ++j) images[j] = make_image(1,1,3);
 
     if (l.classes != demo_classes) {
         printf("Parameters don't match: in cfg-file classes=%d, in data-file classes=%d \n", l.classes, demo_classes);
@@ -170,6 +169,7 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
     det_s = in_s;
 
     for (j = 0; j < NFRAMES / 2; ++j) {
+        free_detections(dets, nboxes);
         fetch_in_thread(0);
         detect_in_thread(0);
         det_img = in_img;
@@ -200,20 +200,25 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
         //'W', 'M', 'V', '2'
     }
 
+    int send_http_post_once = 0;
+    const double start_time_lim = get_time_point();
     double before = get_wall_time();
 
     while(1){
         ++count;
         {
-            if(pthread_create(&fetch_thread, 0, fetch_in_thread, 0)) error("Thread creation failed");
-            if(pthread_create(&detect_thread, 0, detect_in_thread, 0)) error("Thread creation failed");
-
-            float nms = .45;    // 0.4F
+            const float nms = .45;    // 0.4F
             int local_nboxes = nboxes;
             detection *local_dets = dets;
 
+            if(pthread_create(&fetch_thread, 0, fetch_in_thread, 0)) error("Thread creation failed");
+            if(pthread_create(&detect_thread, 0, detect_in_thread, 0)) error("Thread creation failed");
+
             //if (nms) do_nms_obj(local_dets, local_nboxes, l.classes, nms);    // bad results
-            if (nms) do_nms_sort(local_dets, local_nboxes, l.classes, nms);
+            if (nms) {
+                if (l.nms_kind == DEFAULT_NMS) do_nms_sort(local_dets, local_nboxes, l.classes, nms);
+                else diounms_sort(local_dets, local_nboxes, l.classes, nms, l.nms_kind, l.beta_nms);
+            }
 
             //printf("\033[2J");
             //printf("\033[1;1H");
@@ -224,6 +229,17 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
             if (demo_json_port > 0) {
                 int timeout = 400000;
                 send_json(local_dets, local_nboxes, l.classes, demo_names, frame_id, demo_json_port, timeout);
+            }
+
+            //char *http_post_server = "webhook.site/898bbd9b-0ddd-49cf-b81d-1f56be98d870";
+            if (http_post_host && !send_http_post_once) {
+                int timeout = 3;            // 3 seconds
+                int http_post_port = 80;    // 443 https, 80 http
+                if (send_http_post_request(http_post_host, http_post_port, filename,
+                    local_dets, nboxes, classes, names, frame_id, ext_output, timeout))
+                {
+                    if (time_limit_sec > 0) send_http_post_once = 1;
+                }
             }
 
             draw_detections_cv_v3(show_img, local_dets, local_nboxes, demo_thresh, demo_names, demo_alphabet, demo_classes, demo_ext_output);
@@ -266,14 +282,19 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
                 printf("\n cvWriteFrame \n");
             }
 
-            release_mat(&show_img);
 
             pthread_join(fetch_thread, 0);
             pthread_join(detect_thread, 0);
 
+            if (time_limit_sec > 0 && (get_time_point() - start_time_lim)/1000000 > time_limit_sec) {
+                printf(" start_time_lim = %f, get_time_point() = %f, time spent = %f \n", start_time_lim, get_time_point(), get_time_point() - start_time_lim);
+                break;
+            }
+
             if (flag_exit == 1) break;
 
             if(delay == 0){
+                release_mat(&show_img);
                 show_img = det_img;
             }
             det_img = in_img;
@@ -298,13 +319,15 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
     }
 
     // free memory
-    release_mat(&show_img);
-    release_mat(&in_img);
     free_image(in_s);
+    free_detections(dets, nboxes);
 
     free(avg);
     for (j = 0; j < NFRAMES; ++j) free(predictions[j]);
-    for (j = 0; j < NFRAMES; ++j) free_image(images[j]);
+    demo_index = (NFRAMES + demo_index - 1) % NFRAMES;
+    for (j = 0; j < NFRAMES; ++j) {
+            release_mat(&cv_images[j]);
+    }
 
     free_ptrs((void **)names, net.layers[net.n - 1].classes);
 
@@ -322,7 +345,7 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
 }
 #else
 void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int cam_index, const char *filename, char **names, int classes,
-    int frame_skip, char *prefix, char *out_filename, int mjpeg_port, int json_port, int dont_show, int ext_output, int letter_box_in)
+    int frame_skip, char *prefix, char *out_filename, int mjpeg_port, int json_port, int dont_show, int ext_output, int letter_box_in, int time_limit_sec, char *http_post_host)
 {
     fprintf(stderr, "Demo needs OpenCV for webcam images.\n");
 }

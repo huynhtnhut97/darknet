@@ -105,9 +105,20 @@ void backward_network_gpu(network net, network_state state)
             layer prev = net.layers[i-1];
             state.input = prev.output_gpu;
             state.delta = prev.delta_gpu;
+            if (net.optimized_memory && !prev.keep_delta_gpu) {
+                state.delta = net.state_delta_gpu;
+            }
         }
         if (l.onlyforward) continue;
         l.backward_gpu(l, state);
+
+        if (i != 0) {
+            layer prev = net.layers[i - 1];
+            if (net.optimized_memory && state.delta && !prev.keep_delta_gpu) {
+                if (prev.delta_gpu != state.delta) simple_copy_ongpu(prev.outputs*prev.batch, state.delta, prev.delta_gpu);
+                fill_ongpu(prev.outputs*prev.batch, 0, net.state_delta_gpu, 1);
+            }
+        }
 
         /*
         if(i != 0)
@@ -126,12 +137,14 @@ void backward_network_gpu(network net, network_state state)
 void update_network_gpu(network net)
 {
     cuda_set_device(net.gpu_index);
+    const int iteration_num = (*net.seen) / (net.batch * net.subdivisions);
     int i;
     int update_batch = net.batch*net.subdivisions * get_sequence_value(net);
     float rate = get_current_rate(net);
     for(i = 0; i < net.n; ++i){
         layer l = net.layers[i];
         l.t = get_current_batch(net);
+        if (iteration_num > (net.max_batches * 1 / 2)) l.deform = 0;
         if(l.update_gpu){
             l.update_gpu(l, update_batch, rate, net.momentum, net.decay);
         }
