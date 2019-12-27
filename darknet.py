@@ -63,8 +63,7 @@ class DETECTION(Structure):
                 ("prob", POINTER(c_float)),
                 ("mask", POINTER(c_float)),
                 ("objectness", c_float),
-                ("sort_class", c_int),
-                ("uc", POINTER(c_float))]
+                ("sort_class", c_int)]
 
 
 class IMAGE(Structure):
@@ -242,7 +241,6 @@ def detect(net, meta, image, thresh=.5, hier_thresh=.5, nms=.45, debug= False):
     #pylint: disable= C0321
     im = load_image(image, 0, 0)
     if debug: print("Loaded image")
-    #print("Entered here")
     ret = detect_image(net, meta, im, thresh, hier_thresh, nms, debug)
     free_image(im)
     if debug: print("freed image")
@@ -304,7 +302,7 @@ netMain = None
 metaMain = None
 altNames = None
 
-def performDetect(imagePath="data/dog.jpg",output="./", thresh= 0.5, configPath = "./cfg/yolov3.cfg", weightPath = "yolov3.weights", metaPath= "./cfg/coco.data", showImage= True, makeImageOnly = False, initOnly= False):
+def performDetect(imagePath="data/dog.jpg",output="./", thresh= 0.25, configPath = "./cfg/yolov3.cfg", weightPath = "yolov3.weights", metaPath= "./cfg/coco.data", showImage= True, makeImageOnly = False, initOnly= False):
     """
     Convenience function to handle the detection and returns of objects.
 
@@ -395,7 +393,7 @@ def performDetect(imagePath="data/dog.jpg",output="./", thresh= 0.5, configPath 
     detections = detect(netMain, metaMain, imagePath.encode("ascii"), thresh)
     if showImage:
         try:
-            print("enter here")
+            print('entered here')
             from skimage import io, draw
             import numpy as np
             image = io.imread(imagePath)
@@ -441,11 +439,11 @@ def performDetect(imagePath="data/dog.jpg",output="./", thresh= 0.5, configPath 
             # if not makeImageOnly:
             #     io.imshow(image)
             #     io.show()
-            detections = {
-                "detections": detections,
-                "image": image,
-                "caption": "\n<br/>".join(imcaption)
-            }
+            # detections = {
+            #     "detections": detections,
+            #     "image": image,
+            #     "caption": "\n<br/>".join(imcaption)
+            # }
         except Exception as e:
             print("Unable to show image: "+str(e))
     return detections
