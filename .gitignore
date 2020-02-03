@@ -9,6 +9,11 @@
 *.dll
 *.lib
 *.dylib
+*.weights
+*.backup
+*.mp4
+*.avi
+*.conv.*
 mnist/
 data/
 caffe/

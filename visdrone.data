@@ -1,0 +1,5 @@
+classes= 80
+train  = data/visdrone/train.txt
+valid = data/visdrone/test.list
+names = data/visdrone.names
+backup = backup/
